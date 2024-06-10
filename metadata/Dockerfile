@@ -1,2 +1,1 @@
-FROM ghcr.io/compbiocore/lee_rnaseq:apr_26_01-36-57_2024
-RUN R -e "BiocManager::install('airway')"
+FROM ghcr.io/compbiocore/ccv_bootcamp_annotations:jun_10_03-32-17_2024
