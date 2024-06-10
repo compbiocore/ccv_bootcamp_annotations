@@ -1,2 +1,1 @@
-FROM ghcr.io/compbiocore/ccv_bootcamp_annotations:jun_10_04-30-14_2024
-RUN R -e "install.packages('igraph')"
+FROM ghcr.io/compbiocore/ccv_bootcamp_annotations:jun_10_04-43-11_2024
