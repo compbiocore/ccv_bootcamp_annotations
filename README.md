@@ -18,11 +18,11 @@ Fill in the fields as follows:
 
 -   `Memory`: 15
 
--   `Singularity Container Path`:/oscar/data/shared/databases/workshops/bootcamp_2024/ngs_count/bootcamp_ngs_counts.sif
+-   `Singularity Container Path`:/oscar/data/shared/databases/workshops/bootcamp_2024/ngs_counts/ngscounts.sif
 
 -   `Package install Path`: leave blank
 
--   `Path for R Executable`: This should be the full path to the `ccv_bootcamp_annotations` repository you made in step 4.
+-   `Path for R Executable`: ~/scratch
 
 -   `R Module`: leave blank
 
