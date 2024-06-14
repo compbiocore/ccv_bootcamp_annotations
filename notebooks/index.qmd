@@ -1,0 +1,767 @@
+## To use this notebook
+1.  Go to `ood.ccv.brown.edu` (you will need an Oscar account).
+2.  Go to 'Clusters' in the blue menu bar at the top and click the drop-down that says '\>\_OSCAR Shell Access'
+3.  Go to your home folder (`cd ~`)
+4.  Git clone the repo (\``git clone https://github.com/compbiocore/ccv_bootcamp_scrna.git`\`)
+5.  Go back to `ood.ccv.brown.edu` and look under `Interactive Apps` in the blue menu bar and click on `RStudio on Singularity` under `Expert GUIs`.
+
+Fill in the fields as follows:
+
+-   `Account`: leave blank\
+-   `Partition`: leave blank\
+-   `Number of hours`: 24\
+-   `Num Cores`: 4\
+-   `Memory`: 15\
+-   `Singularity Container Path`:/oscar/data/shared/databases/workshops/bootcamp_2024/ngs_count/bootcamp_ngs_counts.sif\
+-   `Package install Path`: leave blank\
+-   `Path for R Executable`: This should be the full path to the `ccv_bootcamp_scrna` repository you made in step 4.\
+-   `R Module`: leave blank\
+-   `Additional Data Path`: leave blank
+-   `Reservation`: bootcamp\
+
+Once your job starts, click the button to connect to session.\
+At the top of the screen you'll see a menu bar that starts with 'file', click on 'file' and 'open file' and open the index.qmd file in the repo you cloned.\
+
+
+## Annotation Resources
+
+This workshop will cover some of the genomic annotation packages from Bioconductor and how to use them. This information might be helpful if you want to do things like:
+
+    Convert between different gene identifiers or chromosome naming conventions
+    Fine gene promoter region ranges or sequences
+    Figure out which GO terms are associated with your genes of interest
+
+Let's load some packages:
+
+```{r}
+library("tidyverse")
+library("ggplot2")
+library("BiocManager")
+library("gridExtra")
+library("airway")
+library("AnnotationHub")
+library("clusterProfiler")
+library("biomaRt")
+library("DESeq2")
+library("GenomicFeatures")
+library("enrichplot")
+library("BSgenome")
+library("BSgenome.Hsapiens.UCSC.hg19")
+```
+
+```{r}
+res <- readRDS(here::here("res.rds"))
+```
+
+```{r}
+res
+```
+
+
+```{r}
+rld <- readRDS(here::here("rld.rds"))
+```
+
+```{r}
+rld
+```
+
+Let's work with the `res` results table. We can see that each row is a gene (`ENSG...`) and each column gives us some information about the differential expression analysis. These gene IDs are not particularly informative, but we can use biomaRt to fix that.
+
+# Using biomaRt
+
+The [biomaRt](https://bioconductor.org/packages/release/bioc/html/biomaRt.html) package makes it easy to query public repositories of biological data. We can use biomaRt to query Ensembl for annotations so that we can look for 'housekeeping genes' which are typically considered to be stably expressed and shouldn't show large variations across different samples. We have selected a list of genes based on two publications that queried public cancer genome data to find housekeeping genes for use with RNA-seq from cancer cell lines (https://doi.org/10.1186/s12859-019-2809-2, https://doi.org/10.3389/fgene.2019.00097). 
+
+First, let's load biomaRt and make a vector of the gene symbols from the published data:
+
+```{r}
+housekeeping <- c('PCBP1','RER1', 'RPN1', 'PUM1', 'IPO8')
+```
+
+Then we can see what BioMarts are available:
+
+```{r}
+listMarts()
+```
+
+Let's use `ENSEMBL_MART_ENSEMBL` (you might get an error that says `Ensembl site unresponsive, trying uswest mirror`, run `?useEnsembl` to get more information about available options).
+
+```{r}
+ensembl <- useEnsembl(biomart = 'ENSEMBL_MART_ENSEMBL')
+```
+
+You can see a list of all available datasets within the mart if you run `listDatasets(ensembl)` -- there are many (~200 of them), so let's narrow it down a little and look only for human data.
+
+```{r}
+searchDatasets(mart = ensembl, pattern = 'hsapiens')
+```
+
+Now we can put it all together to create a BioMart object: (you might get an error that says `Ensembl site unresponsive, trying uswest mirror`)
+
+```{r}
+ensembl <- useEnsembl(biomart = 'ENSEMBL_MART_ENSEMBL', dataset='hsapiens_gene_ensembl', mirror = 'uswest')
+```
+
+Later, we will use the `getBM()` function to query BioMart (this is the main function of biomaRt). This function takes the followingarguments:
+
+`attributes`: the attributes you want to retrieve                     
+`filters`: the filters that should be used in the query                    
+`values`: the values of the filters                    
+`mart`: the mart object you want to use.   
+
+We can use the `listAttributes` function to see what information is available in `ensembl` (limiting it here to the first 5)
+
+```{r}
+attributes = listAttributes(ensembl)
+attributes[1:5,]
+```
+
+Note that there are ~3000 attributes for this mart! We only care a about two -- `ensembl_gene_id` and `hgnc_symbol`.
+
+We can use the `listFilters` function to see what our filtering options are (limiting it here to the first 5)
+
+```{r}
+filters = listFilters(ensembl)
+filters[1:5,]
+```
+
+We can use `getBM` to query the BioMart object                   
+
+```{r}
+ensembl_bm <- getBM(
+    attributes = c('ensembl_gene_id','hgnc_symbol'),
+    filters = 'hgnc_symbol',
+    values = housekeeping, 
+    mart = ensembl)
+ensembl_bm
+```
+
+Let's look at the `rlog` normalized counts for our housekeeping genes:
+
+```{r}
+housekeeping_rld <- data.frame(assay(rld)[ensembl_bm$ensembl_gene_id, ])
+head(housekeeping_rld)
+```
+
+The `ensembl_gene_id` is currently stored as the rownames. Let's go ahead and turn it into a column in the data frame:
+
+```{r}
+housekeeping_rld$ensembl_gene_id <- rownames(housekeeping_rld)
+head(housekeeping_rld)
+```
+
+Then we use the `gather` function to convert the data to a long format.
+
+```{r}
+housekeeping_rld_tidy <- gather(housekeeping_rld, key = 'sample', value = 'rlog_counts', SRR1039508:SRR1039521)
+head(housekeeping_rld_tidy)
+```
+
+Let's add the annotation information we pulled from biomaRt:
+
+```{r}
+housekeeping_rld_tidy <- inner_join(ensembl_bm, housekeeping_rld_tidy, by = 'ensembl_gene_id')
+head(housekeeping_rld_tidy)
+```
+
+Let's look at the expression of our housekeeping genes to see if they look stably expressed in our data:
+
+```{r}
+options(repr.plot.width=10, repr.plot.height=5)
+
+ggplot(housekeeping_rld_tidy, aes(x=sample, y=rlog_counts)) + 
+geom_bar(stat="identity") +
+facet_wrap(~hgnc_symbol, nrow = 1) +
+theme(axis.text.x = element_text(angle = 90))
+```
+
+These housekeeping genes look stably expressed across each sample.
+
+# Using AnnotationHub
+
+Now we can try using AnnotationHub to do something similar to what we just did with `biomaRt`.
+Many of the data types we will work with from AnnotationHub are based on the `AnnotationDb` object class -- including OrgDb, TxDb, and many others. This means that they have many functions and methods in common (http://web.mit.edu/~r/current/arch/i386_linux26/lib/R/library/AnnotationDbi/html/AnnotationDb-class.html).               
+
+First, let's connect to the hub using `AnnotationHub` and look at the output.
+
+```{r}
+ah <- AnnotationHub()
+ah
+```
+
+You might get an error:
+
+Error in AnnotationHub(): DEFUNCT: As of AnnotationHub (>2.23.2), default caching location has changed.
+  Problematic cache: /users/jwalla12/.cache/AnnotationHub
+  See https://bioconductor.org/packages/devel/bioc/vignettes/AnnotationHub/inst/doc/TroubleshootingTheCache.html#default-caching-location-update
+
+Traceback:
+
+1. AnnotationHub()
+2. stop(msg = paste0("DEFUNCT: As of AnnotationHub (>2.23.2), default caching location has changed.\n", 
+ .     "  Problematic cache: ", path.expand(olddefault), "\n", "  See https://bioconductor.org/packages/devel/bioc/vignettes/AnnotationHub/inst/doc/TroubleshootingTheCache.html#default-caching-location-update\n"))
+ 
+
+If you do, run this and then re-run the code to connect to AnnotationHub:
+
+moveFiles<-function(package){
+        olddir <- path.expand(rappdirs::user_cache_dir(appname=package))
+        newdir <- tools::R_user_dir(package, which="cache")
+        dir.create(path=newdir, recursive=TRUE)
+        files <- list.files(olddir, full.names =TRUE)
+        moveres <- vapply(files,
+        FUN=function(fl){
+          filename = basename(fl)
+          newname = file.path(newdir, filename)
+          file.rename(fl, newname)
+        },
+        FUN.VALUE = logical(1))
+        if(all(moveres)) unlink(olddir, recursive=TRUE)
+    }
+
+package="AnnotationHub"
+moveFiles(package)
+
+This is one of the very nice things about using AnnotationHub -- there's many data providers, data classes, and organisms represented in the hub. You can access these elements using `$` accessor:
+
+```{r}
+head(unique(ah$dataprovider))
+length(unique(ah$dataprovider))
+```
+
+```{r}
+unique(ah$rdataclass)
+```
+
+## OrgDb objects
+
+One of the options you can see here is `OrgDb`, which is an organism-specific, genome wide annotation. We can use it to map between different gene ID types using a central identifier (usually Entrez gene ID). 
+
+OrgDb names are always of the form: org.Ab.id.db (e.g.  org.Sc.sgd.db) where Ab is a 2-letter abbreviation of the organism and id is an abbreviation (in lower-case) describing the type of central identifier (`eg` for Entrez Gene ids).
+
+Let's see what our options are for `Homo sapiens` and `OrgDb`:
+
+```{r}
+AnnotationHub::query(ah, pattern = c("Homo sapiens", "OrgDb"))
+```
+
+So you can see here that there is an OrgDb for Homo sapiens that uses Entrez gene ID as the central identifier.
+
+```{r}
+orgdb <- AnnotationHub::query(ah, pattern = c("Homo sapiens", "OrgDb"))[[1]]
+```
+
+```{r}
+orgdb
+```
+
+What types of data can we retrieve from the OrgDb? Let's use `keytypes()` to find out. 
+
+The likely use case is that you are hoping to convert between different ID types (like we did with biomaRt). One way to do this is the `select()` function. AnnotationHub imports this function from AnnotationDbi so you can run `?AnnotationDbi::select` to view the help. As I said before, OrgDbs are based on the AnnotationDb object base class and the `select`, `columns`, `keys`, and `keytypes` arguments are used together to query AnnotationDb objects.
+
+`select` will retrieve the data as a data.frame based on parameters for selected keys columns and keytype arguments.
+
+`columns` shows which kinds of data can be returned for the AnnotationDb object.
+
+`keys` returns keys for the database contained in the AnnotationDb object. 
+
+`keytypes` allows the user to discover which keytypes can be passed in to select or keys and the keytype argument.
+
+We can view columns and keytypes -- note that these can be the same but are not always the same.
+
+```{r}
+columns(orgdb)
+```
+
+```{r}
+keytypes(orgdb)
+```
+
+Let's look at a few examples of what the key entries look like
+
+```{r}
+head(keys(orgdb, keytype="SYMBOL"))
+```
+
+We can try running `select` to look for the housekeeping genes in the OrgDb to retrieve their ENSEMBL and ENTREZIDs:
+
+```{r}
+ens_entr_orgdb <- select(orgdb, keys=housekeeping, 
+       columns=c("ENSEMBL","ENTREZID"), 
+       keytype="SYMBOL")
+ens_entr_orgdb
+```
+
+As you can see, this returned a 1:1 mapping between keys and columns, but this might not always be the case. What happens if we use "GO" as one of the columns?
+
+```{r}
+go_orgdb <- select(orgdb, keys=housekeeping, 
+       columns=c("ENSEMBL","GO"), 
+       keytype="SYMBOL")
+head(go_orgdb)
+```
+
+This might not be the ideal outcome for you. Another approach is to use the `mapIds` function. `mapIds` is similar to `select` in that it uses `keys` and `keytypes` but it uses `column` instead of `columns` and can only return one column type, 
+
+```{r}
+mapped_go <- mapIds(orgdb, keys=housekeeping, 
+       column="GO", 
+       keytype="SYMBOL")
+head(mapped_go)
+```
+
+By default, `mapIds` will return the first match. If you really want all of the GO terms, you can specify the `multiVals` argument. Here's the options for `multiVals`:
+
+first:
+
+    This value means that when there are multiple matches only the 1st thing that comes back will be returned. This is the default behavior
+list:
+
+    This will just returns a list object to the end user
+filter:
+
+    This will remove all elements that contain multiple matches and will therefore return a shorter vector than what came in whenever some of the keys match more than one value
+asNA:
+
+    This will return an NA value whenever there are multiple matches
+CharacterList:
+
+    This just returns a SimpleCharacterList object
+FUN:
+
+    You can also supply a function to the multiVals argument for custom behaviors. The function must take a single argument and return a single value. This function will be applied to all the elements and will serve a 'rule' that for which thing to keep when there is more than one element. So for example this example function will always grab the last element in each result:  last <- function(x){x[[length(x)]]} 
+
+Let's specify that we want `multiVals="list"`
+
+```{r}
+mapped_go <- mapIds(orgdb, keys=housekeeping, 
+       column="GO", 
+       keytype="SYMBOL",
+       multiVals="list")
+head(mapped_go)
+```
+
+## TxDB Objects
+
+One of the other options in AnnotationHub is`TxDb`. They are also based on the AnnotationDb class and use similar methods.
+
+A TxDb object connects a set of genomic coordinates to transcript-oriented features. It also contains feature IDs for transcripts and genes so TxDb objects can be used to link gene IDs and transcipt IDs.
+Let's work with the human TxDb object:
+
+```{r}
+AnnotationHub::query(ah, pattern = c("Homo sapiens", "TxDb", "hg19"))
+```
+
+We can query the AnnotationHub and specify which record we'd like to use:
+
+```{r}
+txdb <- AnnotationHub::query(ah, pattern = c("Homo sapiens", "TxDb", "hg19"))[['AH52258']]
+```
+
+```{r}
+txdb
+```
+
+Just like how we did with the OrgDb, we can look at what keytypes are available to us
+
+```{r}
+keytypes(txdb)
+```
+
+We can also use `select` in a similar way:
+
+```{r}
+select(txdb, keys = c("2597"), columns=c("TXNAME", "TXID", "CDSNAME"), keytype="GENEID")
+```
+
+Or `mapIds`
+
+```{r}
+mapIds(txdb, keys = c("2597"), column="TXNAME", keytype="GENEID", multiVals="list")
+```
+
+We can look at all the transcripts available in the txdb using the `transcripts()` function:
+
+```{r}
+transcripts(txdb)
+```
+
+We get back a GRanges object the location of each transcript, as well as its `tx_name` and `tx_id`. GRanges objects are just a way to show genomic locations (or Genomic Ranges) (https://www.bioconductor.org/packages/release/bioc/vignettes/GenomicRanges/inst/doc/GenomicRangesIntroduction.html).           
+
+              
+We can also look at `exons()`, `cds()`, `genes()` and `promoters()`.         
+You can also look at transcripts grouped by the genes that they are associated with:
+
+```{r}
+txby <- transcriptsBy(txdb, by="gene")
+```
+
+```{r}
+txby
+```
+
+Similar functions include `exonsBy()`, `cdsBy()`, `intronsByTranscript()`, `fiveUTRsByTranscript()`, and `threeUTRsByTranscript()`. 
+
+We can also use `seqlevelsStyle` function  (exported from `GenomeInfoDb`) to get the current seqlevels style of an object and to rename its seqlevels according to a given style. 
+
+```{r}
+seqlevelsStyle(txdb)
+seqinfo(txdb)
+```
+
+We can convert to 'NCBI' style:
+
+```{r}
+seqlevelsStyle(txdb) <- "NCBI"
+seqinfo(txdb)
+```
+
+We can see what styles are supported using `genomeStyles`.
+
+```{r}
+head(genomeStyles("Homo_sapiens"))
+```
+
+Let's convert back to `UCSC` format:
+
+```{r}
+seqlevelsStyle(txdb) <- "UCSC"
+```
+
+You could filter the object to only look at a particular chromosome if you wanted to:
+
+```{r}
+seqlevels(txdb) <- "chr15"
+```
+
+# GenomicRanges
+
+We introduced GRanges objects in the previous section about TxDb objects. GRanges objects are a series of genomic ranges with a start and end location on the genome. It can be used to store the location of genomic features such as contiguous binding sites, transcripts, and exons. These objects can be created by using the GRanges constructor function. For example:
+
+```{r}
+gr1 <- GRanges(
+    seqnames = Rle(c("chr1", "chr2", "chr1", "chr3"), c(1, 3, 2, 4)),
+    ranges = IRanges(101:110, end = 111:120, names = head(letters, 10)),
+    strand = Rle(strand(c("-", "+", "*", "+", "-")), c(1, 2, 2, 3, 2)),
+    score = 1:10,
+    GC = seq(1, 0, length=10))
+gr1
+```
+
+You can also build them from data frames, specifying the start and end site and indicating that you'd like to keep the extra metadata columns. For example:
+
+```{r}
+seqnames <- c("chr1", "chr2", "chr3", "chr4", "chr5")
+start <- c(100, 2150, 3200, 4250, 5300)
+end <- c(1000, 15000, 25000, 30000, 40000)
+strand <- c('-', '-', '+', '+', '+')
+metadata <- c('.10', '.20', '.30', '.40', '.50')
+df <- data.frame(seqnames, start, end, strand, metadata)
+gr2 <- makeGRangesFromDataFrame(df, 
+                              seqnames.field = 'seqnames',
+                              start.field = 'start',
+                              end.field = 'end',
+                              strand.field = 'strand',
+                              keep.extra.columns = TRUE)
+gr2
+```
+
+There's several ways you can adjust or extend the ranges -- see https://bioconductor.org/packages/release/bioc/html/GenomicRanges.html. We'll discuss the `promoters` function here, but there's many, many more options.
+
+`promoters` returns an object of the same type and length as x containing promoter ranges. Promoter ranges extend around the transcription start site (TSS) which is defined as start(x). The upsteam and downstream arguments define the number of nucleotides in the 5' and 3' direction, respectively. The full range is defined as,
+
+(start(x) - upstream) to (start(x) + downstream - 1).
+
+Ranges on the * strand are treated the same as those on the + strand. When no seqlengths are present in x, it is possible to have non-positive start values in the promoter ranges. This occurs when (TSS - upstream) < 1. In the equal but opposite case, the end values of the ranges may extend beyond the chromosome end when (TSS + downstream + 1) > 'chromosome end'. When seqlengths are not NA the promoter ranges are kept within the bounds of the defined seqlengths.
+
+```{r}
+gr_promoters <- promoters(gr2, upstream=1000, downstream=200)
+gr_promoters
+```
+
+We can combine this with the `rtracklayer` export function to make a GTF file
+
+```{r}
+rtracklayer::export(gr_promoters, 'gr_promoters.gtf')
+```
+
+`rtracklayer` supports importing and exporting GRanges objects to or from many common bioinformatics formats -- see  https://bioconductor.org/packages/release/bioc/html/rtracklayer.html
+
+There are also many functions in `GenomicRanges` to compare two GRanges objects -- we will talk about using `distancetoNearest`, but again there are many, many options that we aren't touching on.
+
+distanceToNearest: Returns the distance for each range in x to its nearest neighbor in the subject.
+
+```{r}
+dist_to_nearest <- distanceToNearest(x = gr2, subject = gr1)
+dist_to_nearest
+```
+
+`distanceToNearest` returns the indices of the query (x) and subject. We can pull out the the query and subject indices like this:
+
+```{r}
+query_i <- as.matrix(dist_to_nearest)[,1]
+subject_i <- as.matrix(dist_to_nearest)[,2]
+query_i
+subject_i
+```
+
+Then use those indices to find the ranges and their distances:
+
+```{r}
+gr2_dist <- gr2[c(query_i),]
+gr1_dist <- gr1[c(subject_i),]
+gr2_dist
+gr1_dist
+```
+
+Then pull it all together, converting the GRanges objects to data frames, giving them unique column names, and then making a new data frame with all the information about the ranges being compared and their distances.
+
+```{r}
+gr1_dist <- data.frame(gr1_dist)
+gr2_dist <- data.frame(gr2_dist)
+
+colnames(gr1_dist) <- paste0(colnames(gr1_dist), '_subject')
+colnames(gr2_dist) <- paste0(colnames(gr2_dist), '_query')
+
+out_df <- cbind(data.frame(gr1_dist), 
+                data.frame(gr2_dist), 
+                data.frame(dist_to_nearest))
+out_df
+```
+
+# BSGenome
+
+BSGenome is one option if you want to use R to search for actual sequence data. BSGenomes are `Biostrings-based` genomes, meaning that they use the package `BioStrings` to organize the data and facilitate access (https://bioconductor.org/packages/release/bioc/html/Biostrings.html). 
+
+We can see which genomes are available:
+
+```{r}
+head(available.genomes())
+```
+
+You can load `BSgenome.Hsapiens.UCSC.hg19` or `Hsapiens` into the environment (we did this at the start of the notebook), and quickly confirm txdb and Hsapiens BSGenome are the same genome assembly (they are both hg19).
+
+```{r}
+Hsapiens
+txdb
+```
+
+We can extract the exon ranges from `txdb` grouped by transcript:
+
+```{r}
+transcripts <- exonsBy(txdb, by="tx", use.names=TRUE)
+```
+
+Then we can extract the transcript sequences from the genome (we'll just use the first transcript to make it faster).
+
+```{r}
+tx_seqs <- extractTranscriptSeqs(Hsapiens, transcripts[1])
+```
+
+Then we can look and see that we have a `DNAStringSet` as the output -- the sequences.
+
+```{r}
+tx_seqs
+```
+
+We can also use `Biostrings` to pull out any arbitrary sequence from a granges object. What if we wanted the sequences of the housekeeping gne
+```{r}
+housekeeping_ranges <- getBM(
+    attributes = c('ensembl_gene_id','hgnc_symbol','chromosome_name','start_position', 'end_position', 'strand'),
+    filters = 'hgnc_symbol',
+    values = housekeeping, 
+    mart = ensembl)
+```
+
+We will need to convert the strand values to be `+`, `-`, or `*`:
+```{r}
+housekeeping_ranges$strand <- stringr::str_replace(housekeeping_ranges$strand, '-1', '-')
+housekeeping_ranges$strand <- stringr::str_replace(housekeeping_ranges$strand, '1', '+')
+```
+
+```{r}
+housekeeping_gr<- makeGRangesFromDataFrame(housekeeping_ranges, 
+                              seqnames.field = 'chromosome_name',
+                              start.field = 'start_position',
+                              end.field = 'end_position',
+                              strand.field = 'strand',
+                              keep.extra.columns = TRUE)
+```
+
+You can see that the `BSgenome` object has the chromosomes as `chr1`, while `housekeeping_gr` has `1`. We can fix this by setting the `seqlevelsStyle`:
+```{r}
+housekeeping_gr
+BSgenome.Hsapiens.UCSC.hg19
+GenomeInfoDb::seqlevelsStyle(housekeeping_gr) <- 'UCSC'
+housekeeping_gr
+```
+
+Set the names of our granges object:
+
+```{r}
+names(housekeeping_gr) <- housekeeping_gr$hgnc_symbol
+```
+
+Then extract the sequences:
+```{r}
+Biostrings::getSeq(BSgenome.Hsapiens.UCSC.hg19, housekeeping_gr)
+```
+
+# Ontology Analysis
+
+Once we are at the step where we have genes that are differentially expressed, we can see if there is any enrichment in any functional gene groups. Two commonly used methods to look for enrichment are overrepresentation analysis (ORA) or gene set enrichment analysis (GSEA).          
+- **Over Representation Analysis (ORA)** looks for functions or processes that are over-represented (= enriched) in an experimentally-derived gene list. The background used by default is all of the genes that have an annotation. This will find genes where the difference is large, but will not detect a situation where the difference is small but coordinated across a set of genes.      
+
+- **Gene Set Enrichment (GSEA)** aggregates per-gene statistics across genes in a set. It takes a ranked list of genes and determines whether members of a gene set are randomly distributed throughout that list or if they are found primarily at the top or bottom of the list. GSEA will calculate an enrichment score based on whether a gene set is over-represented at the top or bottom fo the list, estimate the significance of the enrichment, and adjust for multiple hypothesis testing.       
+
+There are many packages for running these types of analyses ([gage](https://www.bioconductor.org/packages/release/bioc/html/gage.html), [EnrichmentBrowser](https://www.bioconductor.org/packages/release/bioc/html/EnrichmentBrowser.html)) and many of them will use similar approaches to test for enrichment. We will use [clusterProfiler](https://www.bioconductor.org/packages/release/bioc/html/clusterProfiler.html).          
+
+We will use [gene ontologies](http://geneontology.org/docs/ontology-documentation/) to organize the genes into groups based on their role in an organism. Gene Ontology loosely organize genes into three hierarchical graphs that correspond to three large umbrella categories -- **Molecular Function, Cellular Component, and Biological Process**. You can read the formal descriptions of these categories in the documentation linked above. A quote from the documentation illustrates an example of how these categories are related:        
+
+```
+In an example of GO annotation, the gene product “cytochrome c” can be described by the molecular function oxidoreductase activity, the biological process oxidative phosphorylation, and the cellular component mitochondrial matrix.
+```
+
+We can use our previously made `orgdb` object to run the enrichment analysis on `res`, which is the `results` object from DESeq2 differential expression analysis run on the `airway` data. We are comparing the dexamethasone treatment conditions, comparing treated to untreated.       
+
+We will use the functions `gseGO` and `enrichGO` from clusterProfiler.      
+
+- `gseGO` is a GSEA method, it takes a order ranked geneList as input and uses a Kolmogorov Smirnov test to run Gene Set Enrichment Analysis (GSEA) [Subramanian et al. 2005](https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/16199517/). GSEA is useful in scenarios where the fold changes are subtle but modules of genes are regulated in a coordinated way.    
+- `enrichGO` is an ORA method and takes a list of genes (does not neet to be ranked) and uses Fisher's exact test with a hypergeometric distribution to run Enrichment Analysis [Boyle et al. 2004](https://academic.oup.com/bioinformatics/article/20/18/3710/202612).     
+
+```{r}
+#Might need to re-load some packages at this point:
+library("AnnotationHub")
+library("clusterProfiler")
+ah <- AnnotationHub()
+orgdb <- AnnotationHub::query(ah, pattern = c("Homo sapiens", "OrgDb"))[[1]]
+```
+
+The DOSE package comes with a pre-made `geneList` for us to work with. Let's pull that data down and make a set of genes with a fold change larger than 2.
+
+```{r}
+data(geneList, package="DOSE")
+gene <- names(geneList)[abs(geneList) > 2]
+```
+
+Then we can run `enrichGO` which is an ORA method and takes the following arguments:
+
+`gene`	a vector of entrez gene id.\
+`OrgDb`	OrgDb\
+`keyType`	keytype of input gene\
+`ont`	One of "BP", "MF", and "CC" subontologies, or "ALL" for all three. (Biological Process, Molecular Function, Cellular Compartment\
+`pvalueCutoff`	adjusted pvalue cutoff on enrichment tests to report\
+`pAdjustMethod`	one of "holm", "hochberg", "hommel", "bonferroni", "BH", "BY", "fdr", "none"\
+`universe`	background genes. If missing, the all genes listed in the database (eg TERM2GENE table) will be used as background.\
+`qvalueCutoff`	qvalue cutoff on enrichment tests to report as significant. Tests must pass i) pvalueCutoff on unadjusted pvalues, ii) pvalueCutoff on adjusted pvalues and iii) qvalueCutoff on qvalues to be reported.\
+`minGSSize`	minimal size of genes annotated by Ontology term for testing.\
+`maxGSSize`	maximal size of genes annotated for testing\
+`readable`	whether mapping gene ID to gene Name\
+`pool`	If ont='ALL', whether pool 3 GO sub-ontologies\    
+
+```{r}
+ego <- enrichGO(gene          = gene,
+                universe      = names(geneList),
+                OrgDb         = orgdb,
+                ont           = "CC",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+```
+
+Then we can visualize the output with a dotplot:
+
+```{r}
+dotplot(ego, showCategory = 5)
+```
+
+The size of the dot indicates how many members of the group are represented in the enrichment and the adjusted p-value is the Benjamini-Hochberg corrected p-value. `GeneRatio` is `k/n`, where for a given category (e.g. 'receptor regulator activity') `k` is the overlap of 'receptor regulator activity' genes in `gene_list` compared to all 'receptor regulator activity' genes in the org.db, where `n` is the overlap of all genes in `gene_list` compares to all genes in the org.db.
+
+Then we can run `gseGO` which is a GSEA method. It takes the following arguments:\
+`geneList`	order ranked geneList\
+`ont`	one of "BP", "MF", and "CC" subontologies, or "ALL" for all three.\
+`OrgDb`	OrgDb\
+`keyType`	keytype of gene\
+`exponent`	weight of each step\
+`minGSSize`	minimal size of each geneSet for analyzing\
+`maxGSSize`	maximal size of genes annotated for testing\
+`eps`	This parameter sets the boundary for calculating the p value.\
+`pvalueCutoff`	pvalue Cutoff\
+`pAdjustMethod`	pvalue adjustment method\
+`verbose`	print message or not\
+`seed`	logical\
+`by`	one of 'fgsea' or 'DOSE'       
+
+```{r}
+ggo <- gseGO(geneList     = geneList,
+              OrgDb        = orgdb,
+              ont          = "CC",
+              minGSSize    = 100,
+              maxGSSize    = 500,
+              pvalueCutoff = 0.05,
+              verbose      = FALSE)
+```
+
+Then we can visualize the output with a dotplot:
+
+```{r}
+dotplot(ggo, showCategory = 5)
+```
+
+We can also use `enrichKEGG` and `gseKEGG` to get similar tests using KEGG data instead of GO data.
+
+```{r}
+kk <- enrichKEGG(gene         = gene,
+                 organism     = 'hsa',
+                 pvalueCutoff = 0.05)
+dotplot(kk, showCategory = 5)
+```
+
+```{r}
+kk2 <- gseKEGG(geneList     = geneList,
+               organism     = 'hsa',
+               minGSSize    = 120,
+               pvalueCutoff = 0.05,
+               verbose      = FALSE)
+dotplot(kk2, showCategory = 5)
+```
+
+You can also run a more generic enrichment analysis using the `GSEA` and `enricher` functions as long as you have information about which genes belong with which terms. Let's look at the Hallmark genes from msigdbr (https://www.gsea-msigdb.org/gsea/msigdb/human/genesets.jsp?collection=H)
+```{r}
+library(msigdbr)
+```
+
+Find the human hallmark data
+```{r}
+gene_set <- msigdbr(species = "Homo sapiens", category = "H") 
+gene_set
+```
+
+Makea term2gene and term2name file
+```{r}
+test_term2gene <- gene_set[,c('gs_id', 'human_ensembl_gene')]
+test_term2name <- gene_set[,c('gs_id', 'gs_name')]
+head(test_term2gene)
+head(test_term2name)
+```
+
+
+Make a geneList and list of differentially expressed genes
+```{r}
+DEGs_airway <- res %>% data.frame() %>% dplyr::filter(padj < .05) 
+geneList_airway <- res$log2FoldChange
+names(geneList_airway) <- res$ensembl_gene_id
+geneList_airway <- sort(geneList_airway, decreasing = TRUE)
+```
+
+run generic GSEA and enricher
+```{r}
+generic_GSEA <- GSEA(geneList_airway, TERM2GENE=test_term2gene, TERM2NAME=test_term2name)
+dotplot(generic_GSEA)
+```
+
+```{r}
+generic_enricher <- enricher(gene = DEGs_airway$ensembl_gene_id, TERM2GENE=test_term2gene, TERM2NAME=test_term2name)
+dotplot(generic_enricher)
+```
