@@ -2,7 +2,7 @@
 1.  Go to `ood.ccv.brown.edu` (you will need an Oscar account).
 2.  Go to 'Clusters' in the blue menu bar at the top and click the drop-down that says '\>\_OSCAR Shell Access'
 3.  Go to your home folder (`cd ~`)
-4.  Git clone the repo (\``git clone https://github.com/compbiocore/ccv_bootcamp_scrna.git`\`)
+4.  Git clone the repo (\``git clone https://github.com/compbiocore/ccv_bootcamp_annotations.git`\`)
 5.  Go back to `ood.ccv.brown.edu` and look under `Interactive Apps` in the blue menu bar and click on `RStudio on Singularity` under `Expert GUIs`.
 
 Fill in the fields as follows:
@@ -14,7 +14,7 @@ Fill in the fields as follows:
 -   `Memory`: 15\
 -   `Singularity Container Path`:/oscar/data/shared/databases/workshops/bootcamp_2024/ngs_count/bootcamp_ngs_counts.sif\
 -   `Package install Path`: leave blank\
--   `Path for R Executable`: This should be the full path to the `ccv_bootcamp_scrna` repository you made in step 4.\
+-   `Path for R Executable`: This should be the full path to the `ccv_bootcamp_annotations` repository you made in step 4.\
 -   `R Module`: leave blank\
 -   `Additional Data Path`: leave blank
 -   `Reservation`: bootcamp\
