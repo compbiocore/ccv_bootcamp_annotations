@@ -26,7 +26,7 @@ Fill in the fields as follows:
 
 -   `R Module`: leave blank
 
--   `Additional Data Path`: leave blank
+-   `Additional Data Path`: /oscar/data/shared/databases/workshops/bootcamp_2024
 
 -   `Reservation`: leave blank
 
