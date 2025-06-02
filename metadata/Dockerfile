@@ -1,3 +1,1 @@
-FROM ghcr.io/compbiocore/ccv_bootcamp_annotations:jun_11_08-00-35_2024
-RUN R -e "BiocManager::install(c('msigdbr', 'airway', 'SummarizedExperiment', 'DESeq2', 'vsn', 'IHW', 'DiffBind', 'ChIPpeakAnno', 'ChIPseeker', 'ChIPQC', 'chromstaRData'))"
-RUN R -e "install.packages('PoiClaClu')"
+FROM ghcr.io/compbiocore/ccv_bootcamp_annotations:jun_02_02-19-59_2025
